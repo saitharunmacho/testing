@@ -245,7 +245,7 @@ class SQLEvaluationAgent:
                     if isinstance(value, list):
                         logger.warning(f"  WARNING: {col} at row {idx} is a list: {value}")
             
-            required_columns = ['User Query', 'SQL Query', 'Classification']
+            required_columns = ['User Query', 'SQL Query']
             missing = [col for col in required_columns if col not in data.columns]
             if missing:
                 raise ValueError(f"Missing columns: {missing}")
@@ -356,25 +356,21 @@ class SQLEvaluationAgent:
                     # Debug the raw data types
                     user_query_raw = row['User Query']
                     sql_query_raw = row['SQL Query']
-                    classification_raw = row['Classification']
                     
-                    logger.debug(f"Raw data types - User Query: {type(user_query_raw)}, SQL Query: {type(sql_query_raw)}, Classification: {type(classification_raw)}")
-                    logger.debug(f"Raw values - User Query: {repr(user_query_raw)}, SQL Query: {repr(sql_query_raw)}, Classification: {repr(classification_raw)}")
+                    logger.debug(f"Raw data types - User Query: {type(user_query_raw)}, SQL Query: {type(sql_query_raw)}")
+                    logger.debug(f"Raw values - User Query: {repr(user_query_raw)}, SQL Query: {repr(sql_query_raw)}")
                     
                     # Check if any value is a list
                     if isinstance(user_query_raw, list):
                         logger.warning(f"User Query at row {idx} is a list: {user_query_raw}")
                     if isinstance(sql_query_raw, list):
                         logger.warning(f"SQL Query at row {idx} is a list: {sql_query_raw}")
-                    if isinstance(classification_raw, list):
-                        logger.warning(f"Classification at row {idx} is a list: {classification_raw}")
                     
                     # Safely convert values to strings to handle any list or other non-string types
                     user_query_benchmark = str(user_query_raw) if pd.notna(user_query_raw) else ""
                     sql_query_benchmark = str(sql_query_raw) if pd.notna(sql_query_raw) else ""
-                    classification_benchmark = str(classification_raw) if pd.notna(classification_raw) else ""
                     
-                    logger.debug(f"Converted values - User Query: {repr(user_query_benchmark)}, SQL Query: {repr(sql_query_benchmark)}, Classification: {repr(classification_benchmark)}")
+                    logger.debug(f"Converted values - User Query: {repr(user_query_benchmark)}, SQL Query: {repr(sql_query_benchmark)}")
                     
                     # Try to create sets for comparison
                     try:
@@ -402,7 +398,6 @@ class SQLEvaluationAgent:
                             best_match = {
                                 'User Query': user_query_benchmark,
                                 'SQL Query': sql_query_benchmark,
-                                'Classification': classification_benchmark,
                                 'similarity': similarity
                             }
                             logger.debug(f"New best match found with similarity: {similarity}")
@@ -431,14 +426,12 @@ class SQLEvaluationAgent:
         try:
             return {
                 'total_queries': len(self.benchmark_data),
-                'classifications': self.benchmark_data['Classification'].value_counts().to_dict(),
                 'avg_query_length': self.benchmark_data['User Query'].str.len().mean()
             }
         except Exception as e:
             logger.error(f"Error getting stats: {e}")
             return {
                 'total_queries': 0,
-                'classifications': {},
                 'avg_query_length': 0.0,
                 'error': str(e)
             }
