@@ -294,21 +294,21 @@ class SQLEvaluationAgent:
             logger.info(f"Starting evaluation for user query: {user_query}")
             logger.info(f"Generated SQL: {generated_sql}")
             
-            logger.info("Finding best match...")
-            best_match = self._find_best_match(user_query)
+            logger.info("Finding matching user query in benchmark data...")
+            matching_benchmark = self._find_matching_user_query(user_query)
             
-            if best_match is None:
-                logger.info("No matching benchmark query found")
+            if matching_benchmark is None:
+                logger.info("No matching user query found in benchmark data")
                 return EvaluationResult(
                     rating="Bad",
-                    explanation="No matching benchmark query found",
+                    explanation="The user query doesn't exist in the golden queries",
                     score=0.0,
-                    comparison_details={'error': 'No benchmark found'}
+                    comparison_details={'error': 'User query not found in benchmark data'}
                 )
             
-            logger.info(f"Best match found: {best_match}")
-            benchmark_sql = best_match['SQL Query']
-            match_info = best_match
+            logger.info(f"Found matching user query: {matching_benchmark['User Query']}")
+            benchmark_sql = matching_benchmark['SQL Query']
+            match_info = matching_benchmark
             
             logger.info("Evaluating SQL comparison...")
             comparison = self.sql_comparator.evaluate_sql_comparison(generated_sql, benchmark_sql)
@@ -340,54 +340,53 @@ class SQLEvaluationAgent:
                 comparison_details={'error': str(e)}
             )
     
-    def _find_best_match(self, user_query: str) -> Optional[Dict[str, Any]]:
+    def _find_matching_user_query(self, user_query: str) -> Optional[Dict[str, Any]]:
         try:
-            best_match = None
-            best_similarity = 0.0
-            
-            logger.info(f"Starting best match search for query: {user_query}")
+            logger.info(f"Searching for matching user query: {user_query}")
             logger.info(f"Benchmark data shape: {self.benchmark_data.shape}")
             logger.info(f"Benchmark data columns: {list(self.benchmark_data.columns)}")
             
+            # First try exact match (case-insensitive)
             for idx, row in self.benchmark_data.iterrows():
                 try:
-                    logger.debug(f"Processing row {idx}")
-                    
-                    # Debug the raw data types
                     user_query_raw = row['User Query']
                     sql_query_raw = row['SQL Query']
                     
-                    logger.debug(f"Raw data types - User Query: {type(user_query_raw)}, SQL Query: {type(sql_query_raw)}")
-                    logger.debug(f"Raw values - User Query: {repr(user_query_raw)}, SQL Query: {repr(sql_query_raw)}")
-                    
-                    # Check if any value is a list
-                    if isinstance(user_query_raw, list):
-                        logger.warning(f"User Query at row {idx} is a list: {user_query_raw}")
-                    if isinstance(sql_query_raw, list):
-                        logger.warning(f"SQL Query at row {idx} is a list: {sql_query_raw}")
-                    
-                    # Safely convert values to strings to handle any list or other non-string types
+                    # Safely convert values to strings
                     user_query_benchmark = str(user_query_raw) if pd.notna(user_query_raw) else ""
                     sql_query_benchmark = str(sql_query_raw) if pd.notna(sql_query_raw) else ""
                     
-                    logger.debug(f"Converted values - User Query: {repr(user_query_benchmark)}, SQL Query: {repr(sql_query_benchmark)}")
+                    # Check for exact match (case-insensitive)
+                    if user_query.lower().strip() == user_query_benchmark.lower().strip():
+                        logger.info(f"Found exact match at row {idx}")
+                        return {
+                            'User Query': user_query_benchmark,
+                            'SQL Query': sql_query_benchmark,
+                            'match_type': 'exact',
+                            'row_index': idx
+                        }
+                
+                except Exception as row_error:
+                    logger.error(f"Error processing row {idx}: {row_error}")
+                    continue
+            
+            # If no exact match, try similarity matching with higher threshold
+            best_match = None
+            best_similarity = 0.0
+            similarity_threshold = 0.8  # Higher threshold for user query matching
+            
+            for idx, row in self.benchmark_data.iterrows():
+                try:
+                    user_query_raw = row['User Query']
+                    sql_query_raw = row['SQL Query']
                     
-                    # Try to create sets for comparison
-                    try:
-                        query_words = set(user_query.lower().split())
-                        logger.debug(f"Query words created successfully: {query_words}")
-                    except Exception as e:
-                        logger.error(f"Error creating query_words set: {e}")
-                        logger.error(f"User query that caused error: {repr(user_query)}")
-                        raise
+                    # Safely convert values to strings
+                    user_query_benchmark = str(user_query_raw) if pd.notna(user_query_raw) else ""
+                    sql_query_benchmark = str(sql_query_raw) if pd.notna(sql_query_raw) else ""
                     
-                    try:
-                        benchmark_words = set(user_query_benchmark.lower().split())
-                        logger.debug(f"Benchmark words created successfully: {benchmark_words}")
-                    except Exception as e:
-                        logger.error(f"Error creating benchmark_words set: {e}")
-                        logger.error(f"User query benchmark that caused error: {repr(user_query_benchmark)}")
-                        raise
+                    # Calculate similarity
+                    query_words = set(user_query.lower().split())
+                    benchmark_words = set(user_query_benchmark.lower().split())
                     
                     if query_words and benchmark_words:
                         common_words = query_words.intersection(benchmark_words)
@@ -398,25 +397,26 @@ class SQLEvaluationAgent:
                             best_match = {
                                 'User Query': user_query_benchmark,
                                 'SQL Query': sql_query_benchmark,
-                                'similarity': similarity
+                                'match_type': 'similar',
+                                'similarity': similarity,
+                                'row_index': idx
                             }
-                            logger.debug(f"New best match found with similarity: {similarity}")
+                            logger.debug(f"New best similarity match: {similarity}")
                 
                 except Exception as row_error:
                     logger.error(f"Error processing row {idx}: {row_error}")
-                    logger.error(f"Row data: {dict(row)}")
                     continue
             
-            logger.info(f"Best match search completed. Best similarity: {best_similarity}")
-            if best_similarity > 0.3:
-                logger.info(f"Returning best match with similarity: {best_similarity}")
+            logger.info(f"Similarity search completed. Best similarity: {best_similarity}")
+            if best_similarity >= similarity_threshold:
+                logger.info(f"Found similar match with similarity: {best_similarity}")
                 return best_match
             else:
-                logger.info("No match found above threshold (0.3)")
+                logger.info(f"No match found above threshold ({similarity_threshold})")
                 return None
             
         except Exception as e:
-            logger.error(f"Error finding best match: {e}")
+            logger.error(f"Error finding matching user query: {e}")
             logger.error(f"Exception type: {type(e)}")
             import traceback
             logger.error(f"Traceback: {traceback.format_exc()}")
