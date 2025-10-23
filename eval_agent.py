@@ -13,6 +13,9 @@ from fastapi import FastAPI, HTTPException
 import uvicorn
 import openpyxl
 from openai import OpenAI
+from dotenv import load_dotenv
+
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -34,7 +37,7 @@ class DatabricksClient:
     """Handles Databricks API calls"""
     
     def __init__(self, workspace_url: str, token: str):
-        self.workspace_url = workspace_url.rstrip('/')
+        self.workspace_url = workspace_url
         self.token = token 
         self.client = WorkspaceClient(host=self.workspace_url, token=self.token)
     
@@ -78,6 +81,7 @@ class SQLComparator:
         normalized = re.sub(r'\s+', ' ', sql.strip())
         normalized = re.sub(r';\s*$', '', normalized)
         return normalized.upper()
+        
     
     @staticmethod
     def compare_exact_sql(query1: str, query2: str) -> bool:
@@ -203,7 +207,7 @@ class SQLEvaluationAgent:
         benchmark_file_path: str,
         model_name: str = ""
     ):
-        self.workspace_url = workspace_url.rstrip('/')
+        self.workspace_url = workspace_url
         self.token = token
         self.model_name = model_name
         
@@ -217,23 +221,67 @@ class SQLEvaluationAgent:
     
     def _load_benchmark_data(self, file_path: str) -> pd.DataFrame:
         try:
+            logger.info(f"Loading benchmark data from: {file_path}")
+            
             if file_path.lower().endswith('.xlsx') or file_path.lower().endswith('.xls'):
+                logger.info("Reading Excel file")
                 data = pd.read_excel(file_path)
             else:
+                logger.info("Reading CSV file")
                 data = pd.read_csv(file_path)
+            
+            logger.info(f"Data loaded successfully. Shape: {data.shape}")
+            logger.info(f"Columns: {list(data.columns)}")
+            logger.info(f"Data types: {data.dtypes.to_dict()}")
+            
+            # Check for any list-like data in the first few rows
+            logger.info("Checking first 5 rows for data types:")
+            for idx in range(min(5, len(data))):
+                row = data.iloc[idx]
+                logger.info(f"Row {idx}:")
+                for col in data.columns:
+                    value = row[col]
+                    logger.info(f"  {col}: {type(value)} = {repr(value)}")
+                    if isinstance(value, list):
+                        logger.warning(f"  WARNING: {col} at row {idx} is a list: {value}")
             
             required_columns = ['User Query', 'SQL Query', 'Classification']
             missing = [col for col in required_columns if col not in data.columns]
             if missing:
                 raise ValueError(f"Missing columns: {missing}")
             
+            logger.info("Dropping rows with missing values")
             data = data.dropna(subset=required_columns)
-            data['User Query'] = data['User Query'].str.strip()
-            data['SQL Query'] = data['SQL Query'].str.strip()
+            logger.info(f"Data shape after dropping NaN: {data.shape}")
+            
+            # Safely convert all columns to strings to handle any list or other non-string types
+            logger.info("Converting columns to strings")
+            for col in required_columns:
+                logger.info(f"Converting column: {col}")
+                original_dtype = data[col].dtype
+                logger.info(f"  Original dtype: {original_dtype}")
+                
+                # Check for any list values before conversion
+                list_count = 0
+                for idx, value in data[col].items():
+                    if isinstance(value, list):
+                        list_count += 1
+                        logger.warning(f"  List found at row {idx}: {value}")
+                
+                if list_count > 0:
+                    logger.warning(f"  Found {list_count} list values in column {col}")
+                
+                data[col] = data[col].astype(str).str.strip()
+                logger.info(f"  Converted to string dtype: {data[col].dtype}")
+            
+            logger.info("Data loading completed successfully")
             return data
             
         except Exception as e:
             logger.error(f"Error loading benchmark data: {e}")
+            logger.error(f"Exception type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     def evaluate(
@@ -243,20 +291,30 @@ class SQLEvaluationAgent:
     ) -> EvaluationResult:
 
         try:
+            logger.info(f"Starting evaluation for user query: {user_query}")
+            logger.info(f"Generated SQL: {generated_sql}")
+            
+            logger.info("Finding best match...")
             best_match = self._find_best_match(user_query)
+            
             if best_match is None:
+                logger.info("No matching benchmark query found")
                 return EvaluationResult(
                     rating="Bad",
                     explanation="No matching benchmark query found",
                     score=0.0,
                     comparison_details={'error': 'No benchmark found'}
                 )
+            
+            logger.info(f"Best match found: {best_match}")
             benchmark_sql = best_match['SQL Query']
             match_info = best_match
             
+            logger.info("Evaluating SQL comparison...")
             comparison = self.sql_comparator.evaluate_sql_comparison(generated_sql, benchmark_sql)
+            logger.info(f"Comparison result: {comparison}")
             
-            return EvaluationResult(
+            result = EvaluationResult(
                 rating=comparison['rating'],
                 explanation=comparison['explanation'],
                 score=comparison['score'],
@@ -267,8 +325,14 @@ class SQLEvaluationAgent:
                 }
             )
             
+            logger.info(f"Evaluation completed successfully. Rating: {result.rating}, Score: {result.score}")
+            return result
+            
         except Exception as e:  
             logger.error(f"Evaluation error: {e}")
+            logger.error(f"Exception type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return EvaluationResult(
                 rating="Bad",
                 explanation=f"Evaluation failed: {e}",
@@ -281,40 +345,106 @@ class SQLEvaluationAgent:
             best_match = None
             best_similarity = 0.0
             
-            for _, row in self.benchmark_data.iterrows():
-                query_words = set(user_query.lower().split())
-                benchmark_words = set(row['User Query'].lower().split())
-                
-                if query_words and benchmark_words:
-                    common_words = query_words.intersection(benchmark_words)
-                    similarity = len(common_words) / max(len(query_words), len(benchmark_words))
+            logger.info(f"Starting best match search for query: {user_query}")
+            logger.info(f"Benchmark data shape: {self.benchmark_data.shape}")
+            logger.info(f"Benchmark data columns: {list(self.benchmark_data.columns)}")
+            
+            for idx, row in self.benchmark_data.iterrows():
+                try:
+                    logger.debug(f"Processing row {idx}")
                     
-                    if similarity > best_similarity:
-                        best_similarity = similarity
-                        best_match = {
-                            'User Query': row['User Query'],
-                            'SQL Query': row['SQL Query'],
-                            'Classification': row['Classification'],
-                            'similarity': similarity
-                        }
+                    # Debug the raw data types
+                    user_query_raw = row['User Query']
+                    sql_query_raw = row['SQL Query']
+                    classification_raw = row['Classification']
+                    
+                    logger.debug(f"Raw data types - User Query: {type(user_query_raw)}, SQL Query: {type(sql_query_raw)}, Classification: {type(classification_raw)}")
+                    logger.debug(f"Raw values - User Query: {repr(user_query_raw)}, SQL Query: {repr(sql_query_raw)}, Classification: {repr(classification_raw)}")
+                    
+                    # Check if any value is a list
+                    if isinstance(user_query_raw, list):
+                        logger.warning(f"User Query at row {idx} is a list: {user_query_raw}")
+                    if isinstance(sql_query_raw, list):
+                        logger.warning(f"SQL Query at row {idx} is a list: {sql_query_raw}")
+                    if isinstance(classification_raw, list):
+                        logger.warning(f"Classification at row {idx} is a list: {classification_raw}")
+                    
+                    # Safely convert values to strings to handle any list or other non-string types
+                    user_query_benchmark = str(user_query_raw) if pd.notna(user_query_raw) else ""
+                    sql_query_benchmark = str(sql_query_raw) if pd.notna(sql_query_raw) else ""
+                    classification_benchmark = str(classification_raw) if pd.notna(classification_raw) else ""
+                    
+                    logger.debug(f"Converted values - User Query: {repr(user_query_benchmark)}, SQL Query: {repr(sql_query_benchmark)}, Classification: {repr(classification_benchmark)}")
+                    
+                    # Try to create sets for comparison
+                    try:
+                        query_words = set(user_query.lower().split())
+                        logger.debug(f"Query words created successfully: {query_words}")
+                    except Exception as e:
+                        logger.error(f"Error creating query_words set: {e}")
+                        logger.error(f"User query that caused error: {repr(user_query)}")
+                        raise
+                    
+                    try:
+                        benchmark_words = set(user_query_benchmark.lower().split())
+                        logger.debug(f"Benchmark words created successfully: {benchmark_words}")
+                    except Exception as e:
+                        logger.error(f"Error creating benchmark_words set: {e}")
+                        logger.error(f"User query benchmark that caused error: {repr(user_query_benchmark)}")
+                        raise
+                    
+                    if query_words and benchmark_words:
+                        common_words = query_words.intersection(benchmark_words)
+                        similarity = len(common_words) / max(len(query_words), len(benchmark_words))
+                        
+                        if similarity > best_similarity:
+                            best_similarity = similarity
+                            best_match = {
+                                'User Query': user_query_benchmark,
+                                'SQL Query': sql_query_benchmark,
+                                'Classification': classification_benchmark,
+                                'similarity': similarity
+                            }
+                            logger.debug(f"New best match found with similarity: {similarity}")
+                
+                except Exception as row_error:
+                    logger.error(f"Error processing row {idx}: {row_error}")
+                    logger.error(f"Row data: {dict(row)}")
+                    continue
             
+            logger.info(f"Best match search completed. Best similarity: {best_similarity}")
             if best_similarity > 0.3:
+                logger.info(f"Returning best match with similarity: {best_similarity}")
                 return best_match
-            
-            return None
+            else:
+                logger.info("No match found above threshold (0.3)")
+                return None
             
         except Exception as e:
             logger.error(f"Error finding best match: {e}")
+            logger.error(f"Exception type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
     
     def get_stats(self) -> Dict[str, Any]:
-        return {
-            'total_queries': len(self.benchmark_data),
-            'classifications': self.benchmark_data['Classification'].value_counts().to_dict(),
-            'avg_query_length': self.benchmark_data['User Query'].str.len().mean()
-        }
+        try:
+            return {
+                'total_queries': len(self.benchmark_data),
+                'classifications': self.benchmark_data['Classification'].value_counts().to_dict(),
+                'avg_query_length': self.benchmark_data['User Query'].str.len().mean()
+            }
+        except Exception as e:
+            logger.error(f"Error getting stats: {e}")
+            return {
+                'total_queries': 0,
+                'classifications': {},
+                'avg_query_length': 0.0,
+                'error': str(e)
+            }
 
 agent = None
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="beat it just beat it", version="1.0")
@@ -322,13 +452,35 @@ def create_app() -> FastAPI:
     @app.post("/evaluate")
     async def evaluate_sql(request: dict):
         try:
+            logger.info(f"Received evaluation request: {request}")
+            
             if agent is None:
+                logger.error("Agent not initialized")
                 raise HTTPException(status_code=500, detail="Agent not initialized")
             
+            user_query1 = request.get('user_query', '')
+            logger.info(f"User query: {user_query1}")
+            
+            logger.info("Calling Genie space...")
+            input_to_genie = querying_space(user_query1)
+            logger.info(f"Genie response: {input_to_genie}")
+            
+            logger.info("Getting SQL response...")
+            message_data = input_to_genie.get('message', {})
+            conversation_id = input_to_genie.get('conversation_id')
+            message_id = message_data.get('message_id') or input_to_genie.get('message_id')
+            logger.info(f"Conversation ID: {conversation_id}")
+            logger.info(f"Message ID: {message_id}")
+            raw_generated_sql = getting_response(conversation_id, message_id)
+            generated_sql1 = raw_generated_sql.get('query')
+            logger.info(f"Generated SQL: {generated_sql1}")
+            
+            logger.info("Starting agent evaluation...")
             result = agent.evaluate(
-                user_query=request.get('user_query', ''),
-                generated_sql=request.get('generated_sql', '')
+                user_query1,
+                generated_sql1                
             )
+            logger.info(f"Evaluation result: {result}")
             
             return {
                 "rating": result.rating,
@@ -340,6 +492,9 @@ def create_app() -> FastAPI:
             
         except Exception as e:
             logger.error(f"Evaluation error: {e}")
+            logger.error(f"Exception type: {type(e)}")
+            import traceback
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise HTTPException(status_code=500, detail=str(e))
     
     @app.get("/stats")
@@ -354,7 +509,102 @@ def create_app() -> FastAPI:
 workspace_url = os.getenv('DATABRICKS_HOST')
 token = os.getenv('DATABRICKS_TOKEN')   
 benchmark_file_path = os.getenv('BENCHMARK_FILE_PATH') 
-    
+genie_space_id = os.getenv('GENIE_SPACE_ID')
+base_url = f"{workspace_url}/api/2.0/genie"
+headers = {
+    'Authorization': f'Bearer {token}',
+    'Content-Type': 'application/json'
+}
+
+def querying_space(input_message):
+    url = f"{base_url}/spaces/{genie_space_id}/start-conversation"
+    data = {
+        "content": input_message
+    }
+    response = requests.post(url, headers=headers, json=data)
+    return response.json()
+
+
+def getting_response(conversation_id, message_id):
+    try:
+        import time
+        
+        # Poll for message completion with timeout
+        max_wait_time = 60  # 60 seconds timeout
+        poll_interval = 2   # Poll every 2 seconds
+        elapsed_time = 0
+        
+        logger.info(f"Starting to poll for message completion. Message ID: {message_id}")
+        
+        while elapsed_time < max_wait_time:
+            # Get the conversation messages
+            url = f"{base_url}/spaces/{genie_space_id}/conversations/{conversation_id}/messages"
+            logger.info(f"Polling messages from: {url} (elapsed: {elapsed_time}s)")
+            
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            messages_data = response.json()
+            
+            messages = messages_data.get('messages', [])
+            if not messages:
+                logger.warning("No messages found in response")
+                time.sleep(poll_interval)
+                elapsed_time += poll_interval
+                continue
+            
+            # Find the latest message
+            latest_message = messages[-1]
+            status = latest_message.get('status')
+            logger.info(f"Message status: {status}")
+            
+            if status == "COMPLETED":
+                logger.info("Message completed! Looking for SQL query...")
+                
+                # Look for SQL query in attachments
+                attachments = latest_message.get('attachments', [])
+                logger.info(f"Attachments found: {len(attachments)}")
+                logger.info(f"Attachments: {attachments}")
+                
+                if attachments:
+                    for attachment in attachments:
+                        # Prioritize query field for SQL
+                        if attachment.get('query'):
+                            sql_query = attachment.get('query')
+                            logger.info(f"Found SQL query: {sql_query}")
+                            return sql_query
+                        # Fallback to text if it contains SQL-like content
+                        if attachment.get('text'):
+                            text = attachment.get('text')
+                            # Check if text contains SQL keywords
+                            if any(keyword in text.upper() for keyword in ['SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE']):
+                                logger.info(f"Found SQL in text: {text}")
+                                return text
+                
+                # Check message content as fallback
+                content = latest_message.get('content', '')
+                if content and any(keyword in content.upper() for keyword in ['SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE']):
+                    logger.info(f"Found SQL in message content: {content}")
+                    return content
+                
+                logger.warning("Message completed but no SQL query found in attachments or content")
+                return "No response found"
+                
+            elif status in ["FAILED", "CANCELLED"]:
+                logger.error(f"Message failed with status: {status}")
+                return "No response found"
+            
+            # Message is still processing, wait and try again
+            logger.info(f"Message still processing (status: {status}), waiting {poll_interval}s...")
+            time.sleep(poll_interval)
+            elapsed_time += poll_interval
+        
+        logger.warning(f"Timeout reached ({max_wait_time}s) while waiting for message completion")
+        return "No response found"
+        
+    except Exception as e:
+        logger.error(f"Error getting response: {e}")
+        return f"Error: {str(e)}"
+
 agent = SQLEvaluationAgent(
 workspace_url=workspace_url,
 token=token,
