@@ -1,0 +1,211 @@
+INTERNAL MESSAGE FORMAT
+   
+Standard chat message format used throughout the app:
+   
+   {
+       "role": "user" | "assistant" | "tool",
+       "content": string
+   }
+
+ENDPOINT-SPECIFIC INPUT FORMATS
+   
+   A. Chat Completions / ChatAgent (task_type: "chat/completions" or "agent/v2/chat")
+    
+      {
+          "messages": [
+              {
+                  "role": "user",
+                  "content": "user message text"
+              },
+              {
+                  "role": "assistant",
+                  "content": "assistant response text"
+              },
+              {
+                  "role": "assistant",
+                  "content": "",
+                  "tool_calls": [
+                      {
+                          "id": "call_id_string",
+                          "type": "function",
+                          "function": {
+                              "name": "function_name",
+                              "arguments": "json_string"
+                          }
+                      }
+                  ]
+              },
+              {
+                  "role": "tool",
+                  "content": "tool output/result",
+                  "tool_call_id": "call_id_string"
+              }
+          ],
+          "databricks_options": {
+              "return_trace": true 
+          }
+      }
+   
+   B. ResponsesAgent (task_type: "agent/v1/responses")
+
+      {
+          "input": [
+              {
+                  "role": "user",
+                  "content": "user message text"
+              },
+              {
+                  "type": "message",
+                  "id": "message_id_uuid",
+                  "role": "assistant",
+                  "content": [
+                      {
+                          "type": "output_text",
+                          "text": "assistant response text"
+                      }
+                  ]
+              },
+              {
+                  "type": "function_call",
+                  "id": "call_id_string",
+                  "call_id": "call_id_string",
+                  "name": "function_name",
+                  "arguments": "json_string"
+              },
+              {
+                  "type": "function_call_output",
+                  "call_id": "call_id_string",
+                  "output": "tool output/result"
+              }
+          ],
+          "context": {},
+          "stream": true, 
+          "databricks_options": {
+              "return_trace": true
+          }
+      }
+
+
+OUTPUT SCHEMA
+
+1. ASSISTANTRESPONSE OBJECT
+
+   Returned by all query functions:
+   
+   AssistantResponse(
+       messages: List[Dict],    
+       request_id: Optional[str] 
+   )
+
+2. MESSAGE FORMATS IN RESPONSE
+   
+   A. Assistant Message with Content:
+      {
+          "role": "assistant",
+          "content": "response text string"
+      }
+   
+   B. Assistant Message with Tool Calls:
+      {
+          "role": "assistant",
+          "content": "string or empty string",
+          "tool_calls": [
+              {
+                  "id": "call_id_string",
+                  "type": "function",
+                  "function": {
+                      "name": "function_name",
+                      "arguments": "json_string"
+                  }
+              }
+          ]
+      }
+   
+   C. Tool Response:
+      {
+          "role": "tool",
+          "content": "tool output/result string",
+          "tool_call_id": "call_id_string"
+      }
+
+3. STREAMING RESPONSE CHUNKS
+  
+   
+   A. Chat Completions Format:
+      {
+          "choices": [
+              {
+                  "delta": {
+                      "content": "content chunk string"
+                  }
+              }
+          ],
+          "databricks_output": {
+              "databricks_request_id": "request_id_string"
+          }
+      }
+   
+   B. ChatAgent Format:
+      {
+          "delta": ChatAgentMessage, 
+          "databricks_output": {
+              "databricks_request_id": "request_id_string"
+          }
+      }
+      
+      ChatAgentMessage structure:
+      - id: string
+      - content: string
+      - tool_calls: List[Dict] (optional)
+      - tool_call_id: string (optional, for tool response messages)
+   
+   C. ResponsesAgent Format:
+      {
+          "type": "event_type_string",
+          "item": {
+              "type": "message" | "function_call" | "function_call_output",
+              "id": "message_id_string",
+              "content": [
+                  {
+                      "type": "output_text",
+                      "text": "text content"
+                  }
+              ],
+              "role": "assistant",
+              "call_id": "call_id_string",
+              "name": "function_name",
+              "arguments": "json_string",
+              "call_id": "call_id_string",
+              "output": "output string"
+          },
+          "databricks_output": {
+              "databricks_request_id": "request_id_string"
+          }
+      }
+
+4. FILTERED OUTPUT SPECIFIC TO STREAMLIT(just for understanding)
+   
+   
+   [
+       {
+           "role": "assistant",
+           "content": "clean text content"
+       }
+   ]
+   
+5. FEEDBACK SUBMISSION FORMAT
+  
+   When submitting feedback (thumbs up/down):
+   
+   {
+       "dataframe_records": [
+           {
+               "source": "{\"id\": \"e2e-chatbot-app\", \"type\": \"human\"}",
+               "request_id": "request_id_string",
+               "text_assessments": "[{\"ratings\": {\"answer_correct\": {\"value\": \"positive\" | \"negative\"}}, \"free_text_comment\": null}]",
+               "retrieval_assessments": "[]"
+           }
+       ]
+   }
+
+
