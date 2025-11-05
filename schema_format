@@ -1,4 +1,4 @@
-INTERNAL MESSAGE FORMAT
+Internal Message Format
    
 Standard chat message format used throughout the app:
    
@@ -7,7 +7,7 @@ Standard chat message format used throughout the app:
        "content": string
    }
 
-ENDPOINT-SPECIFIC INPUT FORMATS
+Endpoint-Specific Input Formats
    
    A. Chat Completions / ChatAgent (task_type: "chat/completions" or "agent/v2/chat")
     
@@ -86,9 +86,9 @@ ENDPOINT-SPECIFIC INPUT FORMATS
       }
 
 
-OUTPUT SCHEMA
+Output Schema
 
-1. ASSISTANTRESPONSE OBJECT
+1. Assistantresponse Object
 
    Returned by all query functions:
    
@@ -97,7 +97,7 @@ OUTPUT SCHEMA
        request_id: Optional[str] 
    )
 
-2. MESSAGE FORMATS IN RESPONSE
+2. Message Format In Response
    
    A. Assistant Message with Content:
       {
@@ -128,7 +128,7 @@ OUTPUT SCHEMA
           "tool_call_id": "call_id_string"
       }
 
-3. STREAMING RESPONSE CHUNKS
+3. Streaming Response Chunks
   
    
    A. Chat Completions Format:
@@ -183,7 +183,7 @@ OUTPUT SCHEMA
           }
       }
 
-4. FILTERED OUTPUT SPECIFIC TO STREAMLIT(just for understanding)
+4. Specific to Streamlit(just for understanding)
    
    
    [
@@ -193,8 +193,8 @@ OUTPUT SCHEMA
        }
    ]
    
-5. FEEDBACK SUBMISSION FORMAT
-  
+5. Feedback Submission Format
+
    When submitting feedback (thumbs up/down):
    
    {
